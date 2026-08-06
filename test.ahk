@@ -45,7 +45,6 @@ MainLoop() {
     global running
     
     while (running) {
-        ; Sprawdź czy nastąpiło rozłączenie lub wyzwanie Captcha
         if CheckDisconnect()
             return
         CheckAndSolveCaptcha()
@@ -115,35 +114,25 @@ InterruptibleSleep(ms) {
     return true
 }
 
-; --- FUNKCJA WYKRYWAJĄCA BRAK POŁĄCZENIA / OKNO EKRANU LOGOWANIA ---
 CheckDisconnect() {
     global running
     if (!running)
         return false
 
-    ; 1. Sprawdzamy czzerwony przycisk 'Quit' w lewym dolnym rogu (rozdzielczość 1920x1080)
-    ; Współrzędne dla lewego dolnego rogu przycisku Quit: X=72, Y=938
     try {
         colorQuit := PixelGetColor(72, 938)
-        
-        ; Sprawdzamy czy kolor to odcień czerwonego (przycisk Quit widoczny tylko w menu logowania)
         r := (colorQuit >> 16) & 0xFF
         g := (colorQuit >> 8) & 0xFF
         b := colorQuit & 0xFF
 
-        ; Jeśli piksel jest wyraźnie czerwony (R > 100 i R jest dużo większe niż G i B)
         if (r > 120 && g < 40 && b < 40) {
             StopBotDueToDisconnect("Wykryto powrót do ekranu logowania (Przycisk Quit)")
             return true
         }
     }
 
-    ; 2. Zabezpieczenie drugie: Sprawdzamy złoty ramki przycisku OK w oknie "Connection Lost"
-    ; Środek ekranu (okienko błędu znajduje się dokładnie na środku)
     try {
-        colorOK := PixelGetColor(960, 560) ; Środek przycisku OK
-        
-        ; Kolor złotawy/złoto-brązowy okna komunikatu
+        colorOK := PixelGetColor(960, 560)
         rOK := (colorOK >> 16) & 0xFF
         gOK := (colorOK >> 8) & 0xFF
         bOK := colorOK & 0xFF
@@ -162,7 +151,6 @@ StopBotDueToDisconnect(reason) {
     running := false
     SendInput "{w up}{a up}{F12 up}"
     
-    ; Sygnał dźwiękowy (3 krótkie piski ostrzegawcze)
     Loop 3 {
         SoundBeep 750, 150
         Sleep 50
@@ -217,7 +205,8 @@ CheckAndSolveCaptcha() {
     centerX := A_ScreenWidth // 2
     centerY := A_ScreenHeight // 2
 
-    x := 615, y := 775, w := 120, h := 35
+    ; DOKŁADNE PARAMETRY WYCIĘTE Z TWOICH SCREENÓW:
+    x := 822, y := 530, w := 76, h := 30
     expr := ReadPixelEquation(x, y, w, h, true)
 
     if (expr != "" && RegExMatch(expr, "\d+\s*[\+\-\*/]\s*\d+")) {
@@ -226,8 +215,9 @@ CheckAndSolveCaptcha() {
         answer := EvalMath(expr)
 
         if (answer != "") {
-            inputX := 780, inputY := 780   ; Środek czarnego pola tekstowego
-            yesX   := 665, yesY   := 850   ; Środek przycisku YES
+            ; Współrzędne kliknięcia z Twojego zdjęcia nr 4 oraz współrzędne Yes z wcześniejszego zrzutu:
+            inputX := 1017, inputY := 545   ; Dokładnie tam, gdzie stał kursor na Skärmbild (4)
+            yesX   := 878,  yesY   := 591   ; Przycisk YES
 
             SendEvent "{Click " inputX ", " inputY "}"
             Sleep 100
@@ -263,7 +253,7 @@ CheckAndSolveCaptcha() {
 ; --- RĘCZNE WYWOŁANIE Z NAUKĄ CZCIONKI (F4 / F6) ---
 F4::
 F6:: {
-    x := 615, y := 775, w := 120, h := 35
+    x := 822, y := 530, w := 76, h := 30
     expr := ReadPixelEquation(x, y, w, h, false)
     if (expr != "") {
         MsgBox "Odczytane równanie: " expr "`nWynik: " EvalMath(expr), "Test OCR"
