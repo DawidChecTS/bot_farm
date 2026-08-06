@@ -1,8 +1,12 @@
 #Requires AutoHotkey v2
 #Include Gdip_All.ahk
 
+; Wymuszenie dokładnego odczytu pikseli bez przeliczania skalowania Windows (DPI)
+DllCall("SetThreadDpiAwarenessContext", "ptr", -3)
+
 CoordMode "Mouse", "Screen"
-SetMouseDelay 10 ; Wymusza odstęp czasowy dla akcji myszy
+CoordMode "Pixel", "Screen"
+SetMouseDelay 10
 
 if !A_IsAdmin
 {   
@@ -11,6 +15,10 @@ if !A_IsAdmin
     }
     ExitApp
 }
+
+; Inicjalizacja GDI+
+global pToken := Gdip_Startup()
+OnExit((*) => Gdip_Shutdown(pToken))
 
 global FontCache := Map()
 LoadFontCache()
@@ -37,7 +45,9 @@ MainLoop() {
     global running
     
     while (running) {
-        ; Sprawdź czy okno pytania jest już widoczne przed rozpoczęciem
+        ; Sprawdź czy nastąpiło rozłączenie lub wyzwanie Captcha
+        if CheckDisconnect()
+            return
         CheckAndSolveCaptcha()
 
         ; --- KROK 1: Pierwsza sekwencja AoE x5 (BEZ kliknięcia myszą) ---
@@ -51,18 +61,18 @@ MainLoop() {
         if !InterruptibleSleep(5000)
             return
 
-        ; --- KROK 2: Czekanie 15 sekund (15000 ms) ---
+        ; --- KROK 2: Czekanie 10 sekund ---
         if !InterruptibleSleep(10000)
             return
 
-        ; --- KROK 3: Naciśnięcie F12, a następnie W przez 12 sekund ---
+        ; --- KROK 3: Naciśnięcie F12, a następnie W przez 5 sekund ---
         SendInput "{F12 down}"
         Sleep 50
         SendInput "{F12 up}"
         Sleep 100
 
         SendInput "{w down}"
-        wasInterrupted := !InterruptibleSleep(5000) ; Przytrzymanie 6 sekund
+        wasInterrupted := !InterruptibleSleep(5000)
         SendInput "{w up}"
         if (wasInterrupted)
             return
@@ -71,7 +81,7 @@ MainLoop() {
         Loop 5 {
             if (!running)
                 return
-            ExecuteAoeSequence(true) ; true = kliknij na środku
+            ExecuteAoeSequence(true)
         }
 
         ; Czekanie 5 sekund
@@ -94,13 +104,72 @@ InterruptibleSleep(ms) {
         if (!running)
             return false
         
-        ; Podczas pauzy również kontrolujemy obecność okna zadania
+        if CheckDisconnect()
+            return false
+
         CheckAndSolveCaptcha()
 
         Sleep 100
         elapsed += 100
     }
     return true
+}
+
+; --- FUNKCJA WYKRYWAJĄCA BRAK POŁĄCZENIA / OKNO EKRANU LOGOWANIA ---
+CheckDisconnect() {
+    global running
+    if (!running)
+        return false
+
+    ; 1. Sprawdzamy czzerwony przycisk 'Quit' w lewym dolnym rogu (rozdzielczość 1920x1080)
+    ; Współrzędne dla lewego dolnego rogu przycisku Quit: X=72, Y=938
+    try {
+        colorQuit := PixelGetColor(72, 938)
+        
+        ; Sprawdzamy czy kolor to odcień czerwonego (przycisk Quit widoczny tylko w menu logowania)
+        r := (colorQuit >> 16) & 0xFF
+        g := (colorQuit >> 8) & 0xFF
+        b := colorQuit & 0xFF
+
+        ; Jeśli piksel jest wyraźnie czerwony (R > 100 i R jest dużo większe niż G i B)
+        if (r > 120 && g < 40 && b < 40) {
+            StopBotDueToDisconnect("Wykryto powrót do ekranu logowania (Przycisk Quit)")
+            return true
+        }
+    }
+
+    ; 2. Zabezpieczenie drugie: Sprawdzamy złoty ramki przycisku OK w oknie "Connection Lost"
+    ; Środek ekranu (okienko błędu znajduje się dokładnie na środku)
+    try {
+        colorOK := PixelGetColor(960, 560) ; Środek przycisku OK
+        
+        ; Kolor złotawy/złoto-brązowy okna komunikatu
+        rOK := (colorOK >> 16) & 0xFF
+        gOK := (colorOK >> 8) & 0xFF
+        bOK := colorOK & 0xFF
+
+        if (rOK > 100 && gOK > 60 && bOK < 40) {
+            StopBotDueToDisconnect("Wykryto okno błędu połączenia (Connection Lost)")
+            return true
+        }
+    }
+
+    return false
+}
+
+StopBotDueToDisconnect(reason) {
+    global running
+    running := false
+    SendInput "{w up}{a up}{F12 up}"
+    
+    ; Sygnał dźwiękowy (3 krótkie piski ostrzegawcze)
+    Loop 3 {
+        SoundBeep 750, 150
+        Sleep 50
+    }
+
+    ToolTip "BOT ZATRZYMANY: " reason
+    SetTimer () => ToolTip(), -5000
 }
 
 ExecuteAoeSequence(shouldClick := false) {
@@ -112,7 +181,9 @@ ExecuteAoeSequence(shouldClick := false) {
         if (!running)
             return
 
-        ; Sprawdzenie obecności captcha PRZED każdym wciśnięciem cyfry!
+        if CheckDisconnect()
+            return
+
         CheckAndSolveCaptcha()
 
         SendInput "{" A_Index " down}"
@@ -122,12 +193,10 @@ ExecuteAoeSequence(shouldClick := false) {
     }
     
     if (running) {
-        ; ZAWSZE pozycjonuj kursor na środku ekranu
         MouseMove centerX, centerY, 0
         Sleep 50
 
         if (shouldClick) {
-            ; Kliknięcie w dokładnie centralnym punkcie ekranu
             SendEvent "{Click Left Down}"
             Sleep 60
             SendEvent "{Click Left Up}"
@@ -148,26 +217,21 @@ CheckAndSolveCaptcha() {
     centerX := A_ScreenWidth // 2
     centerY := A_ScreenHeight // 2
 
-    ; Pobranie obrazka z obszaru pytania (silent := true blokuje okienka InputBox podczas gry)
-    x := 1575, y := 708, w := 120, h := 736 - 708
+    x := 615, y := 775, w := 120, h := 35
     expr := ReadPixelEquation(x, y, w, h, true)
 
-    ; Weryfikacja czy odczytano pełny wzór matematyczny (np. 5+6=)
-    if (expr != "" && RegExMatch(expr, "^\d+\s*[\+\-\*/]\s*\d+")) {
-        ; 1. ZATRZYMAJ wysyłanie cyfr 1-9 na czas wpisywania odpowiedzi
+    if (expr != "" && RegExMatch(expr, "\d+\s*[\+\-\*/]\s*\d+")) {
         running := false
 
         answer := EvalMath(expr)
 
         if (answer != "") {
-            inputX := 1820, inputY := 685  ; Środek czarnego pola tekstowego
-            yesX   := 1646, yesY   := 775  ; Środek przycisku YES
+            inputX := 780, inputY := 780   ; Środek czarnego pola tekstowego
+            yesX   := 665, yesY   := 850   ; Środek przycisku YES
 
-            ; 2. Kliknij i aktywuj pole tekstowe
             SendEvent "{Click " inputX ", " inputY "}"
             Sleep 100
 
-            ; 3. Wyczyszczenie pola ze śmieci od prawej do lewej
             SendInput "{End}"
             Sleep 30
             Loop 30 {
@@ -176,21 +240,17 @@ CheckAndSolveCaptcha() {
             }
             Sleep 50
 
-            ; 4. Wpisanie wyliczonego wyniku
             SendInput answer
             Sleep 100
 
-            ; 5. Kliknięcie w przycisk YES
             SendEvent "{Click " yesX ", " yesY "}"
             Sleep 200
 
-            ; 6. Wymuszenie powrotu myszy na środek ekranu (pozycja zero)
             SendEvent "{Click " centerX ", " centerY ", 0}"
             Sleep 100
             MouseMove centerX, centerY, 0
             Sleep 200
 
-            ; 7. Wznów pętlę bota
             running := true
             SetTimer(MainLoop, -10)
         } else {
@@ -200,11 +260,11 @@ CheckAndSolveCaptcha() {
     }
 }
 
-; --- RĘCZNE WYWOŁANIE Z NAUKĄ CZCIONKI (POD F4 / F6) ---
+; --- RĘCZNE WYWOŁANIE Z NAUKĄ CZCIONKI (F4 / F6) ---
 F4::
 F6:: {
-    x := 1575, y := 708, w := 120, h := 736 - 708
-    expr := ReadPixelEquation(x, y, w, h, false) ; silent := false pozwala uczyć skrypt nowych znaków
+    x := 615, y := 775, w := 120, h := 35
+    expr := ReadPixelEquation(x, y, w, h, false)
     if (expr != "") {
         MsgBox "Odczytane równanie: " expr "`nWynik: " EvalMath(expr), "Test OCR"
     } else {
@@ -213,11 +273,10 @@ F6:: {
 }
 
 ReadPixelEquation(x, y, w, h, silent := false) {
-    pToken := Gdip_Startup()
-    if !pToken
+    pBitmap := Gdip_BitmapFromScreen(x "|" y "|" w "|" h)
+    if !pBitmap
         return ""
 
-    pBitmap := Gdip_BitmapFromScreen(x "|" y "|" w "|" h)
     Gdip_GetImageDimensions(pBitmap, &bw, &bh)
 
     grid := []
@@ -298,7 +357,6 @@ ReadPixelEquation(x, y, w, h, silent := false) {
         if FontCache.Has(charHash) {
             resultStr .= FontCache[charHash]
         } else {
-            ; Jeśli silent = true (praca automatyczna), pomiń nauki
             if (!silent) {
                 preview := RenderPreview(grid, block.x1, block.x2, minY, maxY)
                 ib := InputBox("Wykryto nowy znak!`nSzerokość=" charW ", Wysokość=" charH "`n`n" preview "`nPodaj symbol (np. 0-9, +, -, *, /):", "Nauka czcionki", "w320 h260")
@@ -314,8 +372,6 @@ ReadPixelEquation(x, y, w, h, silent := false) {
     }
 
     Gdip_DisposeImage(pBitmap)
-    Gdip_Shutdown(pToken)
-
     return resultStr
 }
 
@@ -363,7 +419,7 @@ LoadFontCache() {
 }
 
 EvalMath(expr) {
-    if !RegExMatch(expr, "^\s*(-?\d+(?:\.\d+)?)\s*([\+\-\*/])\s*(-?\d+(?:\.\d+)?)\s*$", &m)
+    if !RegExMatch(expr, "^\s*(-?\d+(?:\.\d+)?)\s*([\+\-\*/])\s*(-?\d+(?:\.\d+)?)\s*=?", &m)
         return ""
     
     n1 := Float(m[1])
