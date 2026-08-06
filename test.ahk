@@ -64,12 +64,7 @@ MainLoop() {
         if !InterruptibleSleep(10000)
             return
 
-        ; --- KROK 3: Naciśnięcie F12, a następnie W przez 5 sekund ---
-        SendInput "{F12 down}"
-        Sleep 50
-        SendInput "{F12 up}"
-        Sleep 100
-
+        ; --- KROK 3: Naciśnięcie W przez 5 sekund (BEZ F12) ---
         SendInput "{w down}"
         wasInterrupted := !InterruptibleSleep(5000)
         SendInput "{w up}"
@@ -149,7 +144,7 @@ CheckDisconnect() {
 StopBotDueToDisconnect(reason) {
     global running
     running := false
-    SendInput "{w up}{a up}{F12 up}"
+    SendInput "{w up}{a up}"
     
     Loop 3 {
         SoundBeep 750, 150
